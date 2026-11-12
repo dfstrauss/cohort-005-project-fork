@@ -464,6 +464,45 @@ export function markRefundFailed(
   };
 }
 
+/**
+ * A Failed Refund goes back to Pending while the Admin tries sending it again,
+ * so each attempt ends in Issued or Failed and a repeat failure can be recorded.
+ */
+export function retryRefund(
+  database: Database,
+  refundRequestId: number
+): MoneyResult {
+  const request = getRequestWithParties(database, refundRequestId);
+  if (!request) return { ok: false, error: "Refund not found." };
+
+  const updated = database
+    .update(refunds)
+    .set({ moneyStatus: RefundMoneyStatus.Pending })
+    .where(
+      and(
+        eq(refunds.id, refundRequestId),
+        eq(refunds.moneyStatus, RefundMoneyStatus.Failed)
+      )
+    )
+    .returning({ id: refunds.id })
+    .get();
+
+  if (!updated) {
+    return {
+      ok: false,
+      error: request.moneyStatus
+        ? `This Refund is ${request.moneyStatus}, not failed.`
+        : "This Refund Request hasn't been approved.",
+    };
+  }
+
+  return {
+    ok: true,
+    message: "Back to pending. Mark it issued or failed once you've tried again.",
+    email: null,
+  };
+}
+
 // ─── Emails ───
 // There is no mail transport yet; the route logs these.
 

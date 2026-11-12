@@ -14,6 +14,7 @@ import {
   getRefundReviewQueue,
   markRefundFailed,
   markRefundIssued,
+  retryRefund,
   type RefundEmail,
 } from "~/lib/refund-review.server";
 import { formatPrice } from "~/lib/utils";
@@ -50,6 +51,10 @@ const refundActionSchema = z.discriminatedUnion("intent", [
   }),
   z.object({
     intent: z.literal("mark-failed"),
+    refundRequestId: z.coerce.number().int(),
+  }),
+  z.object({
+    intent: z.literal("retry"),
     refundRequestId: z.coerce.number().int(),
   }),
 ]);
@@ -120,7 +125,9 @@ export async function action({ request }: Route.ActionArgs) {
           )
         : input.intent === "mark-issued"
           ? markRefundIssued(db, input.refundRequestId)
-          : markRefundFailed(db, input.refundRequestId);
+          : input.intent === "mark-failed"
+            ? markRefundFailed(db, input.refundRequestId)
+            : retryRefund(db, input.refundRequestId);
 
   if (!result.ok) {
     return data({ error: result.error }, { status: 409 });
@@ -398,13 +405,21 @@ function OpenRequestRow({ request }: { request: OpenRequest }) {
   );
 }
 
+// The actions cell always holds two fixed-width slots, whatever the status,
+// so a button never slides under the cursor after a click. Slot 1 never holds
+// an action that confirms Mark issued: a double-click can't issue a Refund.
+const SLOT = "h-7 w-28 text-xs";
+
 function RefundToSendRow({ refund }: { refund: RefundToSend }) {
   const fetcher = useFetcher<ActionResult>();
   useToastOnResult(fetcher);
+  const [confirmingIssued, setConfirmingIssued] = useState(false);
   const busy = fetcher.state !== "idle";
   const failed = refund.moneyStatus === RefundMoneyStatus.Failed;
+  const amount = formatPrice(refund.amountRefunded);
 
-  function submit(intent: "mark-issued" | "mark-failed") {
+  function submit(intent: "mark-issued" | "mark-failed" | "retry") {
+    setConfirmingIssued(false);
     fetcher.submit(
       { intent, refundRequestId: String(refund.id) },
       { method: "post" }
@@ -420,9 +435,7 @@ function RefundToSendRow({ refund }: { refund: RefundToSend }) {
         </span>
       </td>
       <td className="px-4 py-3 text-sm">{refund.courseTitle}</td>
-      <td className="px-4 py-3 text-sm font-medium">
-        {formatPrice(refund.amountRefunded)}
-      </td>
+      <td className="px-4 py-3 text-sm font-medium">{amount}</td>
       <td className="px-4 py-3 text-sm text-muted-foreground">
         {formatDate(refund.approvedAt)}
         {refund.approvedByName && (
@@ -432,28 +445,56 @@ function RefundToSendRow({ refund }: { refund: RefundToSend }) {
       <td className="px-4 py-3 text-sm">
         {failed ? <Warning>Failed</Warning> : "Pending"}
       </td>
-      <td className="px-4 py-3">
+      <td className="px-4 py-3 align-top">
         <div className="flex gap-1">
-          <Button
-            size="sm"
-            className="h-7 text-xs"
-            disabled={busy}
-            onClick={() => submit("mark-issued")}
-          >
-            Mark issued
-          </Button>
-          {!failed && (
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-7 text-xs"
-              disabled={busy}
-              onClick={() => submit("mark-failed")}
-            >
-              Mark failed
-            </Button>
+          {confirmingIssued ? (
+            <>
+              <Button
+                size="sm"
+                variant="ghost"
+                className={SLOT}
+                disabled={busy}
+                onClick={() => setConfirmingIssued(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                className={SLOT}
+                disabled={busy}
+                onClick={() => submit("mark-issued")}
+              >
+                Confirm issued
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button
+                size="sm"
+                className={SLOT}
+                disabled={busy}
+                onClick={() => setConfirmingIssued(true)}
+              >
+                Mark issued
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className={SLOT}
+                disabled={busy}
+                onClick={() => submit(failed ? "retry" : "mark-failed")}
+              >
+                {failed ? "Retry" : "Mark failed"}
+              </Button>
+            </>
           )}
         </div>
+        {confirmingIssued && (
+          <p className="mt-1 w-[14.25rem] text-xs text-muted-foreground">
+            Emails {refund.learnerName} that {amount} has been sent. This
+            can&apos;t be undone.
+          </p>
+        )}
       </td>
     </tr>
   );
@@ -539,16 +580,23 @@ export default function AdminRefunds({ loaderData }: Route.ComponentProps) {
                 <table className="w-full">
                   <thead>
                     <tr className="border-b border-border bg-muted/50">
-                      {["Learner", "Course", "Amount", "Approved", "Status", "Actions"].map(
-                        (heading) => (
-                          <th
-                            key={heading}
-                            className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground"
-                          >
-                            {heading}
-                          </th>
-                        )
-                      )}
+                      {[
+                        ["Learner", ""],
+                        ["Course", ""],
+                        ["Amount", ""],
+                        ["Approved", ""],
+                        // Fixed widths so the columns don't reflow when a
+                        // row's status or buttons change.
+                        ["Status", "w-28"],
+                        ["Actions", "w-[16.25rem]"],
+                      ].map(([heading, width]) => (
+                        <th
+                          key={heading}
+                          className={`px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground ${width}`}
+                        >
+                          {heading}
+                        </th>
+                      ))}
                     </tr>
                   </thead>
                   <tbody>

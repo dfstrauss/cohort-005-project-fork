@@ -8,6 +8,7 @@ import {
   getRefundReviewQueue,
   markRefundFailed,
   markRefundIssued,
+  retryRefund,
 } from "./refund-review.server";
 
 type TestDb = ReturnType<typeof createTestDb>;
@@ -380,6 +381,28 @@ describe("refund request review", () => {
       );
     });
 
+    it("puts a Failed Refund back to Pending on retry, so it can fail again", () => {
+      markRefundFailed(testDb, s.request.id);
+
+      const retry = retryRefund(testDb, s.request.id);
+
+      expect(retry).toMatchObject({ ok: true, email: null });
+      expect(getRequest(testDb, s.request.id).moneyStatus).toBe(
+        schema.RefundMoneyStatus.Pending
+      );
+      expect(markRefundFailed(testDb, s.request.id).ok).toBe(true);
+      expect(getRequest(testDb, s.request.id).moneyStatus).toBe(
+        schema.RefundMoneyStatus.Failed
+      );
+    });
+
+    it("only retries a Failed Refund", () => {
+      expect(retryRefund(testDb, s.request.id)).toEqual({
+        ok: false,
+        error: "This Refund is pending, not failed.",
+      });
+    });
+
     it("won't change an Issued Refund", () => {
       markRefundIssued(testDb, s.request.id);
 
@@ -388,6 +411,7 @@ describe("refund request review", () => {
         error: "This Refund is already issued.",
       });
       expect(markRefundIssued(testDb, s.request.id).ok).toBe(false);
+      expect(retryRefund(testDb, s.request.id).ok).toBe(false);
     });
   });
 
