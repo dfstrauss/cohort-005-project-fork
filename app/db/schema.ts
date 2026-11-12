@@ -31,10 +31,19 @@ export enum QuestionType {
   TrueFalse = "true_false",
 }
 
+// The status of a Refund Request: has an Admin decided it yet?
 export enum RefundStatus {
   Open = "open",
   Approved = "approved",
   Declined = "declined",
+}
+
+// The status of the Refund itself — the money — once its Refund Request is
+// approved. A Failed Refund can be tried again and still become Issued.
+export enum RefundMoneyStatus {
+  Pending = "pending",
+  Issued = "issued",
+  Failed = "failed",
 }
 
 export enum TeamMemberRole {
@@ -249,6 +258,11 @@ export const refunds = sqliteTable(
       .$defaultFn(() => new Date().toISOString()),
     resolvedAt: text("resolved_at"),
     resolvedByUserId: integer("resolved_by_user_id").references(() => users.id),
+    // Required when an Admin declines; the learner is told it.
+    declineReason: text("decline_reason"),
+    // Null until approved. Each Approved Refund Request has exactly one Refund.
+    moneyStatus: text("money_status").$type<RefundMoneyStatus>(),
+    issuedAt: text("issued_at"),
   },
   (table) => [index("refunds_purchase_idx").on(table.purchaseId)]
 );
