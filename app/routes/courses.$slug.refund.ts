@@ -70,6 +70,19 @@ function getOpenRefundRequest(purchaseId: number) {
     .get();
 }
 
+function getApprovedRefundRequest(purchaseId: number) {
+  return db
+    .select({ id: refunds.id })
+    .from(refunds)
+    .where(
+      and(
+        eq(refunds.purchaseId, purchaseId),
+        eq(refunds.status, RefundStatus.Approved)
+      )
+    )
+    .get();
+}
+
 // The fourteen-day window is counted in whole days, not hours — someone who
 // buys at 23:00 should still get the whole of their fourteenth day.
 function calendarDay(when: Date): string {
@@ -144,6 +157,12 @@ export async function action({ params, request }: Route.ActionArgs) {
     throw data("You already have an open refund request on this purchase.", {
       status: 409,
     });
+  }
+
+  // Only a declined request can be followed by a new one; an approved one
+  // already has its Refund.
+  if (getApprovedRefundRequest(purchase.id)) {
+    throw data("This purchase has already been refunded.", { status: 409 });
   }
 
   // A seat that came out of a team licence, and has been claimed, belongs to
